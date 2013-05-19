@@ -1,8 +1,9 @@
 [Desktop Entry]
-Name=Hardware Monitor
-Name[zh]=硬件监控器
-Comment=designed to monitor various hardware informations such as cpu temperature.
-Icon=hwmon.png
+Name=Hardware Temperature Monitor
+Name[zh_CN]=硬件温度监控器
+Comment=a plasmoid designed to monitor various hardware informations such as cpu and gpu temperature.
+Comment[zh_CN]=用于监控各类硬件信息（比如CPU和GPU温度）的KDE桌面小部件
+Icon=hwmon-icon.png
  
 Type=Service
 X-KDE-ServiceTypes=Plasma/Applet

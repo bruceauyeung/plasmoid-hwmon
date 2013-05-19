@@ -7,9 +7,10 @@ layout.addItem(cpuTempLabel);
 cpuTempLabel.text = "";
 
 // display GPU temperature
-var gpuTempLabel = new Label();
+var gpuTempLabel = undefined;
+gpuTempLabel = new Label();
 layout.addItem(gpuTempLabel);
-gpuTempLabel.text = '';
+gpuTempLabel.text = '';  
 
 var hddTempLabel = new Label();
 layout.addItem(hddTempLabel);
@@ -23,12 +24,15 @@ var tmpFileParentDir = "";
 gpuTempData = "";
 hddTempData = "";
 
+var nvidiaSmiExists = undefined;
 
+var gpuTempRequestTotalCount = 0;
+var gpuTempRequestMissedCount = 0;
 /**
  * 
  */
 var config = {
-    isTraceEnabled : true,
+    isTraceEnabled : false,
     // unit is millisecond
     updatePeriod : 3000
 }
@@ -38,31 +42,69 @@ plasmoid.dataUpdated = function(name, data)
   
     trace("data source name :" + name);
     if(name == "UTC"){
-        var output = {};
         
+        var userIdOutput = {};
         // when the instance of plasmoid runs at the first time, tmpFileParentDir is empty, so we start to initialize it.
         if(tmpFileParentDir.length == 0){
             
-            runShellCmd("id -u", output, function(){
-                var id = output.str.trim();
+            runShellCmd("id -u", userIdOutput, function(){
+                var id = userIdOutput.str.trim();
                 if(id){
                     tmpFileParentDir="/run/user/" + id;
                 }
+            });
+        }
+
+        var nvidiaSmiPathOutput = {};
+        if(nvidiaSmiExists === undefined){
+            
+            runShellCmd("which nvidia-smi", nvidiaSmiPathOutput, function(){
+                var nvidiaSmiPath = nvidiaSmiPathOutput.str.trim();
+                //trace(nvidiaSmiPath);
+                if(nvidiaSmiPath.indexOf("no nvidia-smi in") != -1){
+                    nvidiaSmiExists = false;
+                }else{
+                    nvidiaSmiExists = true;
+                    
+
+                   
+                }
+                //trace("nvidiaSmiExists:" + nvidiaSmiExists);
             });
         }
         
         // when the instance of plasmoid runs at the first time, the preceding runShellCmd codes are trying to 
         // initialize global tmpFileParentDir variable but not finished yet, so normally, the following codes 
         // will write temporary files to /tmp directory
-        if(!updateGPUTemp.updating){
+        if(nvidiaSmiExists && !updateGPUTemp.updating){
            
            updateGPUTemp();
         }  
         
         var gpuOutput = {};
+        
         //this is wierd, why sometimes read blank while running this code block?
-//         if(!runShellCmd.processing){
-//             runShellCmd("nvidia-smi -q  -d TEMPERATURE|grep Gpu|cut -d: -f2", gpuOutput, function(){print("runShellCmd:"+gpuOutput.str);runShellCmd.processing=false;});
+//         if(nvidiaSmiExists && !runShellCmd.processing){
+//             runShellCmd("nvidia-smi -q  -d TEMPERATURE|grep Gpu|cut -d: -f2", gpuOutput, function(){
+//                 gpuTempRequestTotalCount++;
+//                 print("runShellCmd:"+gpuOutput.str);
+//                 
+//                 var gpuTemp = gpuOutput.str;
+//                 
+//                 var temp = "";
+//                 
+//                 temp = gpuTemp.trim().substring(0, gpuTemp.indexOf("C") - 1).trim();
+//                 if(temp.length > 0){
+//                     gpuTempLabel.text = '<font color="red">' + 'G' + temp + '</font>';
+//                 }
+//                 else{
+//                     gpuTempRequestMissedCount++;
+//                 }
+//                 trace("gpuTempRequestMissedPercent : " + gpuTempRequestMissedCount/gpuTempRequestTotalCount + "%");
+//                 
+//                 runShellCmd.processing=false;
+//                 
+//             });
 //         }
         
         //!updateHDDTemp.updating
@@ -108,7 +150,16 @@ plasmoid.configChanged = function()
     var updatePeriod = plasmoid.readConfig("updatePeriod");
     config.updatePeriod = updatePeriod * 1000;
     reconnectDataSources(config.updatePeriod);
-    trace("updatePeriod changed: " + config.updatePeriod);
+    trace("updatePeriod changed to: " + config.updatePeriod);
+    
+    
+    var traceEnabled = plasmoid.readConfig("traceEnabled");
+    
+    
+    // trace info first, otherwise trace information will not be printed if being changed to false.
+    trace("traceEnabled changed to :" + traceEnabled);
+    config.isTraceEnabled = traceEnabled == true ? true: false;
+    
 }
 
 
@@ -155,10 +206,18 @@ function slotGPUDataHandler(job, data)
 
 function slotGPUDataHandleFinished(job)
 {
+    gpuTempRequestTotalCount++;
     var temp = "";
     trace("slotGPUDataHandleFinished:" + gpuTempData);
+    
     temp = gpuTempData.trim().substring(0, gpuTempData.indexOf("C") - 1);
-    gpuTempLabel.text = '<font color="red">' + 'G' + temp + '</font>';
+    if(temp.length > 0){
+        gpuTempLabel.text = '<font color="red">' + 'G' + temp + '</font>';
+    }
+    else{
+        gpuTempRequestMissedCount++;
+    }
+    trace("gpuTempRequestMissedPercent : " + gpuTempRequestMissedCount/gpuTempRequestTotalCount + "%");
     updateGPUTemp.updating = false;
 }
 
@@ -221,11 +280,14 @@ String.prototype.trim = function() {
  * print trace information to console, depending on whether trace is enabled or not.
  * @param {string} message the trace message to be printed to console 
  */
-function trace(message){
+function trace(message, traceFile){
     if(config.isTraceEnabled){
         message = "trace : " + message;
         print(message);
-        traceCmd="echo '" + message + "' >>/tmp/net.ubuntudaily.hwmon.trace.log";
+        if(!traceFile){
+            traceFile = "/tmp/net.ubuntudaily.hwmon.trace.log";
+        }
+        traceCmd="echo '" + message + "' >>" + traceFile;
         plasmoid.runCommand("sh", ["-c",traceCmd]);
         
         

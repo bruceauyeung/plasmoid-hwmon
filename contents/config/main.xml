@@ -10,6 +10,10 @@
       <label>how often temperatures will be updated</label>
       <default>3</default>
     </entry>
+    <entry name="traceEnabled" type="Bool">
+      <label>whether or not to print trace information</label>
+      <default>false</default>
+    </entry>    
   </group>
 
 </kcfg>
