@@ -20,6 +20,8 @@ var timeDataEngine = dataEngine("time");
 var smDataEngine = dataEngine("systemmonitor");
 
 var tmpFileParentDir = "";
+var tmpFileParentDirExistenceDetectionFinished = false;
+var fallbackTmpFileParentDir = "/tmp";
 // information read from file net.ubuntudaily.hwmon.gpu.temp
 gpuTempData = "";
 hddTempData = "";
@@ -28,6 +30,11 @@ var nvidiaSmiExists = undefined;
 
 var gpuTempRequestTotalCount = 0;
 var gpuTempRequestMissedCount = 0;
+
+var sensorsCpuTempRequestTotalCount = 0;
+var sensorsCpuTempRequestMissedCount = 0;
+
+var acpiCpuTempReadable = true;
 /**
  * 
  */
@@ -54,6 +61,17 @@ plasmoid.dataUpdated = function(name, data)
                 }
             });
         }
+        var tmpFileParentDirExistOutput = {};
+        if(tmpFileParentDir.length > 0 && !tmpFileParentDirExistenceDetectionFinished){
+            runShellCmd("file " + tmpFileParentDir, tmpFileParentDirExistOutput, function(){
+                var fileInfo = tmpFileParentDirExistOutput.str.trim();
+                if(fileInfo && fileInfo.indexOf("ERROR") != -1){
+                    tmpFileParentDir=fallbackTmpFileParentDir;
+                }
+                tmpFileParentDirExistenceDetectionFinished = true;
+
+            });            
+        }
 
         var nvidiaSmiPathOutput = {};
         if(nvidiaSmiExists === undefined){
@@ -63,15 +81,46 @@ plasmoid.dataUpdated = function(name, data)
                 //trace(nvidiaSmiPath);
                 if(nvidiaSmiPath.indexOf("no nvidia-smi in") != -1){
                     nvidiaSmiExists = false;
+                    
                 }else{
                     nvidiaSmiExists = true;
-                    
-
-                   
                 }
-                //trace("nvidiaSmiExists:" + nvidiaSmiExists);
+                trace("nvidiaSmiExists:" + nvidiaSmiExists);
             });
         }
+        
+        
+        var sensorsOutput = {};
+        if(!acpiCpuTempReadable){
+            
+            runShellCmd("sensors|grep temp1|cut -d: -f2", sensorsOutput, function(){
+                sensorsCpuTempRequestTotalCount++;
+                
+                var sensorsCpuTemp = sensorsOutput.str.trim();
+                
+                var temp = "";
+                
+                temp = sensorsCpuTemp.substring(sensorsCpuTemp.indexOf("+") + 1, sensorsCpuTemp.indexOf("C") - 1).trim();
+                if(temp.length > 0){
+                    temp = parseFloat(temp);  
+                    if (!isNaN(temp)) {  
+                        
+                        setCpuTempLabel(Math.round(temp));
+                    } 
+                    
+                }
+                else{
+                    sensorsCpuTempRequestMissedCount++;
+                }
+                var percent = new Number((sensorsCpuTempRequestMissedCount/sensorsCpuTempRequestTotalCount)*100);
+                percent = percent.toPrecision(4);
+                trace("sensorsCpuTemp:" + temp);
+                trace("sensorsCpuTempRequestMissedPercent : " + percent + "%");
+                
+                //runShellCmd.processing=false;
+                
+            });
+        }        
         
         // when the instance of plasmoid runs at the first time, the preceding runShellCmd codes are trying to 
         // initialize global tmpFileParentDir variable but not finished yet, so normally, the following codes 
@@ -114,8 +163,11 @@ plasmoid.dataUpdated = function(name, data)
     }else{
         
         if(data["name"] != undefined && data["name"].indexOf("temperature") != -1){
-            
-            cpuTempLabel.text = '<font color="yellow">' + 'C' + data["value"] + '</font>';;
+            setCpuTempLabel(data["value"]);
+        }else{
+            acpiCpuTempReadable = false;
+            slotSysMonSourceRemoved("acpi/Thermal_Zone/0/Temperature");
+            trace("can not read cpu temperature from systemmonitor dataEngine");
         }
         //trace(ObjtoStr(data));
         trace("CPU Temp:" + data["value"]);
@@ -137,10 +189,12 @@ function obj2Str(data) {
 }
  
  
+if(acpiCpuTempReadable){
+    smDataEngine.connectSource("acpi/Thermal_Zone/0/Temperature", plasmoid, config.updatePeriod);
+    smDataEngine.sourceRemoved.connect(slotSysMonSourceRemoved);
+    smDataEngine.sourceAdded.connect(slotSysMonSourceAdded);    
+}
 
-smDataEngine.connectSource("acpi/Thermal_Zone/0/Temperature", plasmoid, config.updatePeriod);
-smDataEngine.sourceRemoved.connect(slotSysMonSourceRemoved);
-smDataEngine.sourceAdded.connect(slotSysMonSourceAdded);
 
 timeDataEngine.connectSource("UTC", plasmoid, config.updatePeriod);
 
@@ -149,7 +203,11 @@ plasmoid.configChanged = function()
     plasmoid.activeConfig = "main";
     var updatePeriod = plasmoid.readConfig("updatePeriod");
     config.updatePeriod = updatePeriod * 1000;
-    reconnectDataSources(config.updatePeriod);
+    
+    if(acpiCpuTempReadable){
+        reconnectDataSources(config.updatePeriod);
+    }
+    
     trace("updatePeriod changed to: " + config.updatePeriod);
     
     
@@ -217,7 +275,9 @@ function slotGPUDataHandleFinished(job)
     else{
         gpuTempRequestMissedCount++;
     }
-    trace("gpuTempRequestMissedPercent : " + gpuTempRequestMissedCount/gpuTempRequestTotalCount + "%");
+    var percent = new Number((gpuTempRequestMissedCount/gpuTempRequestTotalCount)*100);
+    percent = percent.toPrecision(4); 
+    trace("gpuTempRequestMissedPercent : " + percent + "%");
     updateGPUTemp.updating = false;
 }
 
@@ -273,6 +333,7 @@ function slotSysMonSourceRemoved(name) {
 function isDate(obj){ 
     return (typeof obj=='object')&&obj.constructor==Date; 
 } 
+
 String.prototype.trim = function() {
     return this.replace(/^\s+|\s+$/g,"");
 }
@@ -293,8 +354,14 @@ function trace(message, traceFile){
         
     }
 }
+function setCpuTempLabel(temp){
+    cpuTempLabel.text = '<font color="yellow">' + 'C' + temp + '</font>';
+}
 function getTmpFileParentDir(){
-    return tmpFileParentDir.length == 0 ? "/tmp" : tmpFileParentDir;
+    if(!tmpFileParentDirExistenceDetectionFinished){
+        return fallbackTmpFileParentDir;
+    }
+    return tmpFileParentDir.length == 0 ? fallbackTmpFileParentDir : tmpFileParentDir;
 }
 function runShellCmd(cmd, outputData, outputHandler){
 
@@ -304,20 +371,23 @@ function runShellCmd(cmd, outputData, outputHandler){
     var outputDataFile = path + "/"+ new Date().getTime() + ".tmp";
     var rmOutputDataFileCmd = "rm " + outputDataFile;
     var actualCmd = cmd + ">" + outputDataFile;
-
+    actualCmd = actualCmd + " && sleep 0.1";
     
-    
-    var exitCode = plasmoid.runCommand("sh", ["-c", actualCmd]);  
-
+    trace("runShellCmd:" + actualCmd);
+    var exitCode = plasmoid.runCommand("sh", ["-c", actualCmd]);
+    plasmoid.runCommand("sh", ["-c","echo '   '>>"+outputDataFile]);
+    //trace("exitCode:" + exitCode);
     outputData.str = "";
     var dataReceiver = function(job, data){
-        trace("recv:"+data.length);
+        //trace(obj2Str(job));
+        //trace("job:" + job.name +  ",recv:"+data.length);
         if (job == readJob) {
             if (data.length > 0) {
                 
                 outputData.str = outputData.str + data.toUtf8();
             }else{
                 outputData.str = outputData.str.trim();
+                job.kill();
                 plasmoid.runCommand("sh", ["-c", rmOutputDataFileCmd]);
             }
         }    
