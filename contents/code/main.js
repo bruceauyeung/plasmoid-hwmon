@@ -39,11 +39,32 @@ var acpiCpuTempReadable = true;
  * 
  */
 var config = {
+    isInfoEnabled : true,
     isTraceEnabled : false,
     // unit is millisecond
     updatePeriod : 3000
 }
-
+plasmoid.configChanged = function()
+{
+    plasmoid.activeConfig = "main";
+    var updatePeriod = plasmoid.readConfig("updatePeriod");
+    config.updatePeriod = updatePeriod * 1000;
+    
+    if(acpiCpuTempReadable){
+        reconnectDataSources(config.updatePeriod);
+    }
+    
+    trace("updatePeriod changed to: " + config.updatePeriod);
+    
+    
+    var traceEnabled = plasmoid.readConfig("traceEnabled");
+    
+    
+    // trace info first, otherwise trace information will not be printed if being changed to false.
+    trace("traceEnabled changed to :" + traceEnabled);
+    config.isTraceEnabled = traceEnabled == true ? true: false;
+    
+}
 plasmoid.dataUpdated = function(name, data)
 {
   
@@ -106,11 +127,14 @@ plasmoid.dataUpdated = function(name, data)
                     if (!isNaN(temp)) {  
                         
                         setCpuTempLabel(Math.round(temp));
-                    } 
+                    }else{
+                        trace("temp is not a valid number : " + temp);
+                    }
                     
                 }
                 else{
                     sensorsCpuTempRequestMissedCount++;
+                    trace("missed to read cpu temperature from sensors : " + sensorsCpuTempRequestMissedCount + " times");
                 }
                 var percent = new Number((sensorsCpuTempRequestMissedCount/sensorsCpuTempRequestTotalCount)*100);
                 percent = percent.toPrecision(4);
@@ -160,18 +184,19 @@ plasmoid.dataUpdated = function(name, data)
         if(false){
             updateHDDTemp();
         }
-    }else{
-        
-        if(data["name"] != undefined && data["name"].indexOf("temperature") != -1){
+    }else if(name == "acpi/Thermal_Zone/0/Temperature"){
+        trace("data received : " + obj2Str(data));
+        if(data["name"] != "undefined" 
+            && typeof(data["name"]) == "string" 
+            && data["name"].indexOf("temperature") != -1 
+            && typeof(data["value"]) != "undefined"){
             setCpuTempLabel(data["value"]);
+            trace("CPU Temp:" + data["value"]);
         }else{
             acpiCpuTempReadable = false;
             slotSysMonSourceRemoved("acpi/Thermal_Zone/0/Temperature");
             trace("can not read cpu temperature from systemmonitor dataEngine");
-        }
-        //trace(ObjtoStr(data));
-        trace("CPU Temp:" + data["value"]);
-
+        }        
     }
     
 }
@@ -188,37 +213,22 @@ function obj2Str(data) {
     return msg;
 }
  
- 
 if(acpiCpuTempReadable){
-    smDataEngine.connectSource("acpi/Thermal_Zone/0/Temperature", plasmoid, config.updatePeriod);
-    smDataEngine.sourceRemoved.connect(slotSysMonSourceRemoved);
-    smDataEngine.sourceAdded.connect(slotSysMonSourceAdded);    
+    var connected = smDataEngine.connectSource("acpi/Thermal_Zone/0/Temperature", plasmoid, config.updatePeriod);
+    if(connected){
+        smDataEngine.sourceRemoved.connect(slotSysMonSourceRemoved);
+        smDataEngine.sourceAdded.connect(slotSysMonSourceAdded);    
+        info("finished to connect data source 'acpi/Thermal_Zone/0/Temperature'");
+    }else{
+        acpiCpuTempReadable = false;
+        info("failed to connect data source 'acpi/Thermal_Zone/0/Temperature'");
+    }
 }
 
 
 timeDataEngine.connectSource("UTC", plasmoid, config.updatePeriod);
 
-plasmoid.configChanged = function()
-{
-    plasmoid.activeConfig = "main";
-    var updatePeriod = plasmoid.readConfig("updatePeriod");
-    config.updatePeriod = updatePeriod * 1000;
-    
-    if(acpiCpuTempReadable){
-        reconnectDataSources(config.updatePeriod);
-    }
-    
-    trace("updatePeriod changed to: " + config.updatePeriod);
-    
-    
-    var traceEnabled = plasmoid.readConfig("traceEnabled");
-    
-    
-    // trace info first, otherwise trace information will not be printed if being changed to false.
-    trace("traceEnabled changed to :" + traceEnabled);
-    config.isTraceEnabled = traceEnabled == true ? true: false;
-    
-}
+
 
 
 
@@ -350,6 +360,19 @@ function trace(message, traceFile){
         }
         traceCmd="echo '" + message + "' >>" + traceFile;
         plasmoid.runCommand("sh", ["-c",traceCmd]);
+        
+        
+    }
+}
+function info(message, infoFile){
+    if(config.isInfoEnabled){
+        message = "info : " + message;
+        print(message);
+        if(!infoFile){
+            infoFile = "/tmp/net.ubuntudaily.hwmon.info.log";
+        }
+        infoCmd="echo '" + message + "' >>" + infoFile;
+        plasmoid.runCommand("sh", ["-c",infoCmd]);
         
         
     }
