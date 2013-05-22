@@ -1,4 +1,4 @@
-
+var plasmoidStartTime = new Date().getTime();
 var layout = new LinearLayout(plasmoid);
 
 // display CPU temperature
@@ -34,7 +34,17 @@ var gpuTempRequestMissedCount = 0;
 var sensorsCpuTempRequestTotalCount = 0;
 var sensorsCpuTempRequestMissedCount = 0;
 
-var acpiCpuTempReadable = true;
+
+/**
+ * acpiCpuTempReadable === undefined means that "acpi/Thermal_Zone/0/Temperature" data source has been connected but there is no data received yet.
+ * acpiCpuTempReadable === true means that "acpi/Thermal_Zone/0/Temperature" data source has been connected and there is data received and can retrieve temperature from data object.
+ * 
+ * acpiCpuTempReadable === false means that "acpi/Thermal_Zone/0/Temperature" data source can not be connected or no data can be received or no temperature can be retrieved from data object.
+ * 
+ */
+var acpiCpuTempReadable = undefined;
+
+
 /**
  * 
  */
@@ -50,8 +60,10 @@ plasmoid.configChanged = function()
     var updatePeriod = plasmoid.readConfig("updatePeriod");
     config.updatePeriod = updatePeriod * 1000;
     
+    reconnectTimeDataSource(config.updatePeriod);
+    
     if(acpiCpuTempReadable){
-        reconnectDataSources(config.updatePeriod);
+        reconnectCpuTempDataSource(config.updatePeriod);
     }
     
     trace("updatePeriod changed to: " + config.updatePeriod);
@@ -68,6 +80,15 @@ plasmoid.configChanged = function()
 plasmoid.dataUpdated = function(name, data)
 {
   
+    if(acpiCpuTempReadable === undefined ){
+        var currentTime = new Date().getTime();
+        if((currentTime - plasmoidStartTime) > config.updatePeriod){
+            acpiCpuTempReadable = false;
+            slotSysMonSourceRemoved("acpi/Thermal_Zone/0/Temperature");
+            info("more than " + config.updatePeriod + "milliseconds have passed by since this plasmoid started, will try to utilize 'sensors' to get cpu temperature");
+        }
+    }
+    
     trace("data source name :" + name);
     if(name == "UTC"){
         
@@ -112,7 +133,7 @@ plasmoid.dataUpdated = function(name, data)
         
         
         var sensorsOutput = {};
-        if(!acpiCpuTempReadable){
+        if(acpiCpuTempReadable === false){
             
             runShellCmd("sensors|grep temp1|cut -d: -f2", sensorsOutput, function(){
                 sensorsCpuTempRequestTotalCount++;
@@ -191,11 +212,12 @@ plasmoid.dataUpdated = function(name, data)
             && data["name"].indexOf("temperature") != -1 
             && typeof(data["value"]) != "undefined"){
             setCpuTempLabel(data["value"]);
+            acpiCpuTempReadable = true;
             trace("CPU Temp:" + data["value"]);
         }else{
             acpiCpuTempReadable = false;
             slotSysMonSourceRemoved("acpi/Thermal_Zone/0/Temperature");
-            trace("can not read cpu temperature from systemmonitor dataEngine");
+            info("data object received from 'acpi/Thermal_Zone/0/Temperature' data source is not intact, will try to utilize 'sensors' to get cpu temperature");
         }        
     }
     
@@ -212,17 +234,15 @@ function obj2Str(data) {
     }
     return msg;
 }
- 
-if(acpiCpuTempReadable){
-    var connected = smDataEngine.connectSource("acpi/Thermal_Zone/0/Temperature", plasmoid, config.updatePeriod);
-    if(connected){
-        smDataEngine.sourceRemoved.connect(slotSysMonSourceRemoved);
-        smDataEngine.sourceAdded.connect(slotSysMonSourceAdded);    
-        info("finished to connect data source 'acpi/Thermal_Zone/0/Temperature'");
-    }else{
-        acpiCpuTempReadable = false;
-        info("failed to connect data source 'acpi/Thermal_Zone/0/Temperature'");
-    }
+
+var connected = smDataEngine.connectSource("acpi/Thermal_Zone/0/Temperature", plasmoid, config.updatePeriod);
+if(connected){
+    smDataEngine.sourceRemoved.connect(slotSysMonSourceRemoved);
+    smDataEngine.sourceAdded.connect(slotSysMonSourceAdded);    
+    info("finished to connect data source 'acpi/Thermal_Zone/0/Temperature'");
+}else{
+    acpiCpuTempReadable = false;
+    info("failed to connect data source 'acpi/Thermal_Zone/0/Temperature', will try to utilize 'sensors' to get cpu temperature");
 }
 
 
@@ -232,13 +252,13 @@ timeDataEngine.connectSource("UTC", plasmoid, config.updatePeriod);
 
 
 
-function reconnectDataSources(updatePeriod){
+function reconnectCpuTempDataSource(updatePeriod){
     smDataEngine.disconnectSource("acpi/Thermal_Zone/0/Temperature", plasmoid);
-    timeDataEngine.disconnectSource("UTC", plasmoid);
-    
     smDataEngine.connectSource("acpi/Thermal_Zone/0/Temperature", plasmoid, updatePeriod);
-    timeDataEngine.connectSource("UTC", plasmoid, updatePeriod);
-    
+}
+function reconnectTimeDataSource(updatePeriod){
+    timeDataEngine.disconnectSource("UTC", plasmoid);
+    timeDataEngine.connectSource("UTC", plasmoid, updatePeriod);    
 }
 
 function updateGPUTemp(){
