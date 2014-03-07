@@ -4,13 +4,13 @@ var layout = new LinearLayout(plasmoid);
 // display CPU temperature
 var cpuTempLabel = new Label();
 layout.addItem(cpuTempLabel);
-cpuTempLabel.text = "";
+cpuTempLabel.text = "?";
 
 // display GPU temperature
 var gpuTempLabel = undefined;
 gpuTempLabel = new Label();
 layout.addItem(gpuTempLabel);
-gpuTempLabel.text = '';  
+gpuTempLabel.text = '?';  
 
 var hddTempLabel = new Label();
 layout.addItem(hddTempLabel);
@@ -52,29 +52,85 @@ var config = {
     isInfoEnabled : true,
     isTraceEnabled : false,
     // unit is millisecond
-    updatePeriod : 3000
+    updatePeriod : 3000,
+    bypassACPI : true
 }
+function obj2Str(data) {
+    var msg="";
+    for (var elt in data) {
+        msg += elt + ":";
+        msg += data[elt] + ";";
+    }
+    return msg;
+}
+function isDate(obj){ 
+    return (typeof obj=='object')&&obj.constructor==Date; 
+} 
+
+String.prototype.trim = function() {
+    return this.replace(/^\s+|\s+$/g,"");
+}
+Array.prototype.removeByIndex = function(index) {
+    this.splice(index, 1);
+}
+/**
+ * print trace information to console, depending on whether trace is enabled or not.
+ * @param {string} message the trace message to be printed to console 
+ */
+function trace(message, logFile){
+    if(config.isTraceEnabled){
+        message = "trace : " + message;
+        print(message);
+        if(!logFile){
+            logFile = "/tmp/net.ubuntudaily.hwmon.log";
+        }
+        traceCmd="echo '" + message + "' >>" + logFile;
+        plasmoid.runCommand("sh", ["-c",traceCmd]);
+        
+        
+    }
+}
+function info(message, logFile){
+    if(config.isInfoEnabled){
+        message = "info : " + message;
+        print(message);
+        if(!logFile){
+            logFile = "/tmp/net.ubuntudaily.hwmon.log";
+        }
+        infoCmd="echo '" + message + "' >>" + logFile;
+        plasmoid.runCommand("sh", ["-c",infoCmd]);
+        
+        
+    }
+}
+
 plasmoid.configChanged = function()
 {
     plasmoid.activeConfig = "main";
-    var updatePeriod = plasmoid.readConfig("updatePeriod");
-    config.updatePeriod = updatePeriod * 1000;
+    
+    var traceEnabled = plasmoid.readConfig("traceEnabled");
+    
+    // trace info first, otherwise trace information will not be printed if being changed to false.
+    info("traceEnabled changed to :" + traceEnabled);
+    config.isTraceEnabled = traceEnabled == true ? true: false;
+    
+    config.bypassACPI = plasmoid.readConfig("bypassACPI");
+    info("bypassACPI changed to :" + config.bypassACPI);
+    
+    config.updatePeriod = plasmoid.readConfig("updatePeriod") * 1000;
     
     reconnectTimeDataSource(config.updatePeriod);
+    
+    info(acpiCpuTempReadable);
     
     if(acpiCpuTempReadable){
         reconnectCpuTempDataSource(config.updatePeriod);
     }
     
-    trace("updatePeriod changed to: " + config.updatePeriod);
+    info("updatePeriod changed to: " + config.updatePeriod);
     
     
-    var traceEnabled = plasmoid.readConfig("traceEnabled");
-    
-    
-    // trace info first, otherwise trace information will not be printed if being changed to false.
-    trace("traceEnabled changed to :" + traceEnabled);
-    config.isTraceEnabled = traceEnabled == true ? true: false;
+
     
 }
 plasmoid.dataUpdated = function(name, data)
@@ -85,7 +141,7 @@ plasmoid.dataUpdated = function(name, data)
         if((currentTime - plasmoidStartTime) > config.updatePeriod){
             acpiCpuTempReadable = false;
             slotSysMonSourceRemoved("acpi/Thermal_Zone/0/Temperature");
-            info("more than " + config.updatePeriod + "milliseconds have passed by since this plasmoid started, will try to utilize 'sensors' to get cpu temperature");
+            info("more than " + config.updatePeriod + " milliseconds have passed by since this plasmoid started, will try to utilize 'sensors' to get cpu temperature");
         }
     }
     
@@ -127,13 +183,13 @@ plasmoid.dataUpdated = function(name, data)
                 }else{
                     nvidiaSmiExists = true;
                 }
-                trace("nvidiaSmiExists:" + nvidiaSmiExists);
+                info("nvidiaSmiExists:" + nvidiaSmiExists);
             });
         }
         
         
         var sensorsOutput = {};
-        if(acpiCpuTempReadable === false){
+        if(config.bypassACPI || acpiCpuTempReadable === false){
             
             runShellCmd("sensors|grep temp1|cut -d: -f2", sensorsOutput, function(){
                 sensorsCpuTempRequestTotalCount++;
@@ -201,11 +257,12 @@ plasmoid.dataUpdated = function(name, data)
 //             });
 //         }
         
+        // running smartctl requires root privilege, disable hddtemp. maybe sudo and askpass would help.
         //!updateHDDTemp.updating
         if(false){
             updateHDDTemp();
         }
-    }else if(name == "acpi/Thermal_Zone/0/Temperature"){
+    }else if(name == "acpi/Thermal_Zone/0/Temperature" && !config.bypassACPI){
         trace("data received : " + obj2Str(data));
         if(data["name"] != "undefined" 
             && typeof(data["name"]) == "string" 
@@ -226,14 +283,6 @@ plasmoid.dataUpdated = function(name, data)
  
 
  
-function obj2Str(data) {
-    var msg="";
-    for (var elt in data) {
-        msg += elt + ":";
-        msg += data[elt] + ";";
-    }
-    return msg;
-}
 
 var connected = smDataEngine.connectSource("acpi/Thermal_Zone/0/Temperature", plasmoid, config.updatePeriod);
 if(connected){
@@ -253,6 +302,7 @@ timeDataEngine.connectSource("UTC", plasmoid, config.updatePeriod);
 
 
 function reconnectCpuTempDataSource(updatePeriod){
+    trace("reconnectCpuTempDataSource is called");
     smDataEngine.disconnectSource("acpi/Thermal_Zone/0/Temperature", plasmoid);
     smDataEngine.connectSource("acpi/Thermal_Zone/0/Temperature", plasmoid, updatePeriod);
 }
@@ -316,7 +366,7 @@ function slotGPUDataHandleFinished(job)
 function updateHDDTemp(){
     updateHDDTemp.updating = true;
     
-    var cmd = "smartctl -A /dev/sda|grep  Temperature_Celsius> " + getTmpFileParentDir() +"/net.ubuntudaily.hwmon.hdd.temp";
+    var cmd = "smartctl -A /dev/sda|grep Temperature_Celsius>" + getTmpFileParentDir() +"/net.ubuntudaily.hwmon.hdd.temp";
     trace(cmd);
     exitCode = plasmoid.runCommand("sh", ["-c", cmd]);  
 
@@ -343,7 +393,7 @@ function slotHDDDataHandler(job, data)
 function slotHDDDataHandleFinished(job)
 {
     if (job == readJob) {
-        //temp = hddTempData.trim().substring(0, hddTempData.indexOf("C") - 1);
+        temp = parseHDDRawOutput(hddTempData.trim());
         hddTempLabel.text = '<font color="red">' + hddTempData + '</font>';
         hddTempData = "";
         updateHDDTemp.updating = false;
@@ -351,6 +401,21 @@ function slotHDDDataHandleFinished(job)
     } else {
         trace("some other job is finished?")
     }
+}
+function parseHDDRawOutput(hddOutput){
+    trace("hddOutput : " + hddOutput);
+    rawParts = hddOutput.split(" ");
+    for(var i = 0; i < rawParts.length; i++){
+    
+        if(rawParts[i].trim() == ""){
+        
+            rawParts.removeByIndex(i);
+            i--;
+        }
+    }
+    return rawParts[9];
+    
+  
 }
 //------------
 function slotSysMonSourceAdded(name) {
@@ -360,43 +425,7 @@ function slotSysMonSourceRemoved(name) {
     // unsubscribe
     smDataEngine.disconnectSource(name, plasmoid);
 }    
-function isDate(obj){ 
-    return (typeof obj=='object')&&obj.constructor==Date; 
-} 
 
-String.prototype.trim = function() {
-    return this.replace(/^\s+|\s+$/g,"");
-}
-/**
- * print trace information to console, depending on whether trace is enabled or not.
- * @param {string} message the trace message to be printed to console 
- */
-function trace(message, traceFile){
-    if(config.isTraceEnabled){
-        message = "trace : " + message;
-        print(message);
-        if(!traceFile){
-            traceFile = "/tmp/net.ubuntudaily.hwmon.trace.log";
-        }
-        traceCmd="echo '" + message + "' >>" + traceFile;
-        plasmoid.runCommand("sh", ["-c",traceCmd]);
-        
-        
-    }
-}
-function info(message, infoFile){
-    if(config.isInfoEnabled){
-        message = "info : " + message;
-        print(message);
-        if(!infoFile){
-            infoFile = "/tmp/net.ubuntudaily.hwmon.info.log";
-        }
-        infoCmd="echo '" + message + "' >>" + infoFile;
-        plasmoid.runCommand("sh", ["-c",infoCmd]);
-        
-        
-    }
-}
 function setCpuTempLabel(temp){
     cpuTempLabel.text = '<font color="yellow">' + 'C' + temp + '</font>';
 }

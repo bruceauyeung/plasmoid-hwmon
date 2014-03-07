@@ -13,6 +13,11 @@
     <entry name="traceEnabled" type="Bool">
       <label>whether or not to print trace information</label>
       <default>false</default>
+    </entry>   
+    <entry name="bypassACPI" type="Bool">
+      <label>whether or not to bypass ACPI while reading CPU temperature</label>
+      <tooltip></tooltip>
+      <default>true</default>
     </entry>    
   </group>
 
